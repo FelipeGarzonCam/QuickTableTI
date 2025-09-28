@@ -1,0 +1,117 @@
+﻿@{
+    Layout = "_Layout";
+}
+<div class="d-flex justify-content-center align-items-center vh-100">
+    <div class="login-box">
+        <div class="login-logo">
+            <a href="#"><b>QuickTable</b></a>
+        </div>
+        <div class="card">
+            <div class="card-body login-card-body">
+                <p class="login-box-msg">LOGIN</p>
+                <form id="loginForm" method="post" action='@Url.Action("Autenticar","Login")'>
+                    <div class="input-group mb-3">
+                        <input type="text" name="nombre" class="form-control" placeholder="Usuario" required>
+                        <div class="input-group-append">
+                            <div class="input-group-text">
+                                <span class="fas fa-user"></span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="input-group mb-3">
+                        <input type="password" name="contrasena" class="form-control" placeholder="Contraseña" required>
+                        <div class="input-group-append">
+                            <div class="input-group-text">
+                                <span class="fas fa-lock"></span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-12">
+                            <button type="submit" class="btn btn-primary btn-block">Iniciar Sesión</button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+<!-- Modal de 2FA -->
+<div class="modal fade" id="modal2FA" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Segundo Paso de Autenticación</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"
+                        aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p>Introduce en la Raspberry el siguiente código y luego acerca tu tarjeta RC&nbsp;522:</p>
+                <h1 id="lblCode" class="display-5 text-center fw-bold"></h1>
+                <p class="text-center text-muted mb-0">El código expirará en 10&nbsp;minutos.</p>
+            </div>
+        </div>
+    </div>
+</div>
+<script src="~/AdminLTE/plugins/jquery/jquery.min.js"></script>
+<script src="~/AdminLTE/plugins/toastr/toastr.min.js"></script>
+<link rel="stylesheet" href="~/AdminLTE/plugins/toastr/toastr.min.css" />
+<script>
+    $(function () {
+        // Manejador del formulario de login
+        $("#loginForm").on("submit", function (e) {
+            e.preventDefault();
+            var nombre = $("input[name='nombre']").val().trim();
+            var contrasena = $("input[name='contrasena']").val().trim();
+
+            // Validación de campos
+            if (nombre === "" || contrasena === "") {
+                toastr.warning('Por favor, completa todos los campos.', 'Advertencia');
+                return;
+            }
+
+            // Envío de datos al servidor
+            $.ajax({
+                url: '@Url.Action("Autenticar", "Login")',
+                type: 'POST',
+                dataType: 'json',
+                data: { nombre: nombre, contrasena: contrasena },
+                success: function (response) {
+                    if (response.success) {
+                        // Caso de éxito en autenticación básica
+                        toastr.success('Inicio de sesión exitoso.', 'Éxito');
+
+                        if (!response.requiere2FA) {
+                            // Si no requiere 2FA, redirige directamente
+                            setTimeout(function () {
+                                window.location.href = response.redirectUrl;
+                            }, 500);
+                        } else {
+                            // Si requiere 2FA, muestra el modal con el código
+                            $("#lblCode").text(response.code);
+                            $("#modal2FA").modal("show");
+
+                            // Inicia polling para verificar la autenticación por Raspberry
+                            const navId = response.nav;
+                            const timer = setInterval(function () {
+                                $.get("@Url.Action("Check2FA", "Login")", { navId })
+                                  .done(function (ok) {
+                                      if (ok) {
+                                          clearInterval(timer);
+                                          window.location = response.redirectUrl;
+                                      }
+                                  });
+                            }, 3000);
+                        }
+                    } else {
+                        // Error en autenticación
+                        toastr.error(response.message, 'Error');
+                    }
+                },
+                error: function () {
+                    toastr.error('Ocurrió un error al procesar la solicitud.', 'Error');
+                }
+            });
+        });
+    });
+</script>

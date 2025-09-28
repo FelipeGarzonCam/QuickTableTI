@@ -1,0 +1,57 @@
+﻿@{
+    ViewBag.Title = "Crear Administrador";
+    Layout = "~/Views/Shared/_Layout.cshtml";
+    // Extraemos el mensaje y el UID en variables separadas
+    var mensajeOk = TempData["Ok"]?.ToString() ?? "";
+    // Asumimos que el mensaje sigue el formato "Administrador X creado con tarjeta UID"
+    // y que el UID está al final.
+    var partes = mensajeOk.Split(' ');
+    var uid = partes.Length > 0 ? partes[^1] : "";
+}
+
+<h1 class="mb-4">Nuevo Administrador</h1>
+
+@using (Html.BeginForm())
+{
+    @Html.AntiForgeryToken()
+    <div class="mb-3">
+        <label class="form-label">Nombre</label>
+        <input type="text" name="nombre" class="form-control" required />
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Contraseña</label>
+        <input type="password" name="contrasena" class="form-control" required />
+    </div>
+
+    <button class="btn btn-success">
+        <i class="fas fa-save"></i> Guardar
+    </button>
+    <a asp-action="Index" class="btn btn-secondary ms-2">
+        <i class="fas fa-arrow-left"></i> Volver
+    </a>
+}
+
+@if (!string.IsNullOrEmpty(mensajeOk))
+{
+    <div id="pendiente" class="alert alert-warning mt-4">
+        <strong>@mensajeOk</strong><br />
+        <span>Acerque la tarjeta al lector para grabarla…</span>
+    </div>
+
+    <script>
+        // uid ya viene limpio, sin usar C# split() dentro de JS
+        const uid = "@uid";
+        const timer = setInterval(() => {
+            fetch(`/api/tarjeta/estado?uid=${uid}`)
+              .then(r => r.json())
+              .then(ok => {
+                  if (ok) {
+                      clearInterval(timer);
+                      const box = document.getElementById('pendiente');
+                      box.classList.replace('alert-warning','alert-success');
+                      box.innerHTML = 'Tarjeta grabada correctamente';
+                  }
+              });
+        }, 2000);
+    </script>
+}
