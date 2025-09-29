@@ -1,0 +1,488 @@
+#!/usr/bin/env python3
+"""
+QuickTable NFC - VERSION CORREGIDA
+Integración real con servidor .NET según TarjetaApiController
+"""
+
+import tkinter as tk
+from tkinter import messagebox
+import requests
+import threading
+import time
+import json
+import os
+
+# Detectar hardware disponible
+try:
+    import spidev
+    import RPi.GPIO as GPIO
+    GPIO.setwarnings(False)
+    HARDWARE_AVAILABLE = True
+    print("Hardware RC522 detectado")
+except ImportError as e:
+    HARDWARE_AVAILABLE = False
+    print(f"Hardware RC522 no disponible: {e}")
+
+# RC522 MIFARE Classic corregido
+class RC522MifareWriter:
+    def __init__(self):
+        if not HARDWARE_AVAILABLE:
+            raise Exception("Hardware no disponible")
+        
+        self.spi = spidev.SpiDev()
+        self.spi.open(0, 0)
+        self.spi.max_speed_hz = 1000000  # 1 MHz estándar
+        
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setup(25, GPIO.OUT)  # RST
+        
+        # Clave MIFARE Classic por defecto
+        self.key_a = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]
+        
+        self._reset_chip()
+        print("RC522 inicializado correctamente")
+
+    def _write_register(self, addr, val):
+        self.spi.xfer2([(addr << 1) & 0x7E, val])
+
+    def _read_register(self, addr):
+        return self.spi.xfer2([((addr << 1) & 0x7E) | 0x80, 0])[1]
+
+    def _reset_chip(self):
+        # Reset físico
+        GPIO.output(25, GPIO.LOW)
+        time.sleep(0.01)
+        GPIO.output(25, GPIO.HIGH)
+        time.sleep(0.05)
+        
+        # Configuración básica
+        self._write_register(0x01, 0x0F)  # Reset
+        time.sleep(0.05)
+        self._write_register(0x2A, 0x8D)  # Timer
+        self._write_register(0x2B, 0x3E)  # Prescaler
+        self._write_register(0x2D, 30)    # Reload Low
+        self._write_register(0x2C, 0)     # Reload High
+        self._write_register(0x15, 0x40)  # TX Auto
+        self._write_register(0x11, 0x3D)  # Mode
+        # Activar antena
+        self._write_register(0x14, 0x03)
+
+    def _send_command(self, command, data=[]):
+        # Limpiar FIFO
+        self._write_register(0x0A, 0x80)
+        
+        # Escribir datos
+        for byte in data:
+            self._write_register(0x09, byte)
+        
+        # Ejecutar comando
+        self._write_register(0x01, command)
+        
+        if command == 0x0C:  # Transceive
+            self._write_register(0x0D, 0x80)  # Start transmission
+        
+        # Esperar respuesta
+        timeout = 100
+        while timeout > 0:
+            n = self._read_register(0x04)  # ComIrqReg
+            if n & 0x30:  # RxIRq or IdleIRq
+                break
+            if n & 0x01:  # TimerIRq
+                return None
+            timeout -= 1
+            time.sleep(0.001)
+        
+        self._write_register(0x0D, 0x00)  # Stop transmission
+        
+        # Leer respuesta
+        if not (self._read_register(0x06) & 0x1B):  # Sin errores
+            n = self._read_register(0x0A) & 0x7F
+            return [self._read_register(0x09) for _ in range(n)]
+        
+        return None
+
+    def find_card(self):
+        """Detectar tarjeta"""
+        response = self._send_command(0x0C, [0x26])
+        return response is not None
+
+    def read_card_uid(self):
+        """Leer UID de tarjeta"""
+        if not self.find_card():
+            return None
+        
+        response = self._send_command(0x0C, [0x93, 0x20])
+        if response and len(response) == 5:
+            uid = response[:4]
+            # Verificar checksum
+            bcc = response[4]
+            if bcc == (uid[0] ^ uid[1] ^ uid[2] ^ uid[3]):
+                return '-'.join([f"{b:02X}" for b in uid])
+        return None
+
+    def write_text_to_card(self, text):
+        """Escribir texto a tarjeta MIFARE"""
+        if not self.find_card():
+            return False
+        
+        # Obtener UID
+        uid_response = self._send_command(0x0C, [0x93, 0x20])
+        if not uid_response or len(uid_response) != 5:
+            return False
+        
+        uid = uid_response[:4]
+        
+        # Seleccionar tarjeta
+        select_cmd = [0x93, 0x70] + uid
+        select_response = self._send_command(0x0C, select_cmd)
+        if not select_response or select_response[0] != 0x08:
+            return False
+        
+        # Preparar datos (16 bytes exactos)
+        data = text.encode('utf-8')[:16].ljust(16, b'\x00')
+        
+        # Escribir en bloque 4 (primer bloque de datos)
+        auth_cmd = [0x60, 4] + self.key_a + uid  # Autenticar
+        if self._send_command(0x0E, auth_cmd[2:]):  # MFAuthent
+            write_cmd = [0xA0, 4] + list(data)
+            if self._send_command(0x0C, write_cmd):
+                return True
+        
+        return False
+
+    def cleanup(self):
+        try:
+            self.spi.close()
+            GPIO.cleanup()
+        except:
+            pass
+
+# Aplicación principal corregida
+class NFCApp:
+    def __init__(self):
+        self.server_url = ""
+        self.root = None
+        
+        # Inicializar RC522
+        self.reader = None
+        if HARDWARE_AVAILABLE:
+            try:
+                self.reader = RC522MifareWriter()
+                print("RC522 inicializado correctamente")
+            except Exception as e:
+                print(f"Error inicializando RC522: {e}")
+                self.reader = None
+    
+    def setup_window(self):
+        self.root = tk.Tk()
+        self.root.title("QuickTable NFC - Corregido")
+        self.root.geometry("800x600")
+        self.root.resizable(False, False)
+        self.root.configure(bg='#2c3e50')
+        self.root.eval('tk::PlaceWindow . center')
+    
+    def show_server_config(self):
+        self.setup_window()
+        
+        main_frame = tk.Frame(self.root, bg='#2c3e50')
+        main_frame.place(relx=0.5, rely=0.5, anchor='center')
+        
+        tk.Label(main_frame, text="QuickTable NFC", font=('Arial', 24, 'bold'), 
+                fg='white', bg='#2c3e50').pack(pady=(0, 20))
+        
+        tk.Label(main_frame, text="Configuracion del Servidor", font=('Arial', 16), 
+                fg='#bdc3c7', bg='#2c3e50').pack(pady=(0, 30))
+        
+        # Estado del hardware
+        hw_status = "Hardware RC522: OK" if (HARDWARE_AVAILABLE and self.reader) else "Hardware RC522: No disponible"
+        hw_color = '#27ae60' if (HARDWARE_AVAILABLE and self.reader) else '#e74c3c'
+        
+        tk.Label(main_frame, text=hw_status, font=('Arial', 11), 
+                fg=hw_color, bg='#2c3e50').pack(pady=(0, 20))
+        
+        tk.Label(main_frame, text="Direccion IP del Servidor:", font=('Arial', 12, 'bold'), 
+                fg='white', bg='#2c3e50').pack(pady=(0, 5))
+        
+        self.server_ip_entry = tk.Entry(main_frame, font=('Arial', 14), width=20, justify='center')
+        self.server_ip_entry.pack(pady=10)
+        self.server_ip_entry.insert(0, "192.168.101.10")
+        
+        tk.Label(main_frame, text="Puerto:", font=('Arial', 12, 'bold'), 
+                fg='white', bg='#2c3e50').pack(pady=(20, 5))
+        
+        self.server_port_entry = tk.Entry(main_frame, font=('Arial', 14), width=10, justify='center')
+        self.server_port_entry.pack(pady=10)
+        self.server_port_entry.insert(0, "5000")
+        
+        self.connection_status = tk.Label(main_frame, text="Ingrese la direccion IP del servidor", 
+                                        font=('Arial', 11), fg='#95a5a6', bg='#2c3e50')
+        self.connection_status.pack(pady=15)
+        
+        button_frame = tk.Frame(main_frame, bg='#2c3e50')
+        button_frame.pack(pady=20)
+        
+        tk.Button(button_frame, text="Probar Conexion", font=('Arial', 12, 'bold'), 
+                 bg='#f39c12', fg='white', width=12, height=2, 
+                 command=self.test_connection).pack(side='left', padx=10)
+        
+        tk.Button(button_frame, text="Conectar", font=('Arial', 12, 'bold'), 
+                 bg='#27ae60', fg='white', width=12, height=2, 
+                 command=self.connect_server).pack(side='left', padx=10)
+    
+    def test_connection(self):
+        ip = self.server_ip_entry.get().strip()
+        port = self.server_port_entry.get().strip() or "5000"
+        
+        if not ip:
+            self.connection_status.config(text="Ingrese una direccion IP", fg='#e74c3c')
+            return
+        
+        test_url = f"http://{ip}:{port}"
+        self.connection_status.config(text="Probando conexion...", fg='#f39c12')
+        
+        threading.Thread(target=self._test_connection_thread, args=(test_url,), daemon=True).start()
+    
+    def _test_connection_thread(self, test_url):
+        try:
+            # Probar endpoint real del servidor
+            response = requests.get(f"{test_url}/api/tarjeta/pendientes", timeout=5)
+            
+            if response.status_code == 200:
+                self.root.after(0, lambda: self.connection_status.config(
+                    text="Conexion exitosa", fg='#27ae60'))
+                self.server_url = test_url
+            else:
+                self.root.after(0, lambda: self.connection_status.config(
+                    text=f"Error del servidor ({response.status_code})", fg='#e74c3c'))
+        except Exception:
+            self.root.after(0, lambda: self.connection_status.config(
+                text="No se puede conectar", fg='#e74c3c'))
+    
+    def connect_server(self):
+        ip = self.server_ip_entry.get().strip()
+        port = self.server_port_entry.get().strip() or "5000"
+        
+        if not ip:
+            self.connection_status.config(text="Ingrese una direccion IP", fg='#e74c3c')
+            return
+        
+        self.server_url = f"http://{ip}:{port}"
+        self.show_main_menu()
+    
+    def show_main_menu(self):
+        for widget in self.root.winfo_children():
+            widget.destroy()
+        
+        main_frame = tk.Frame(self.root, bg='#2c3e50')
+        main_frame.place(relx=0.5, rely=0.5, anchor='center')
+        
+        tk.Label(main_frame, text="QuickTable NFC", font=('Arial', 24, 'bold'), 
+                fg='white', bg='#2c3e50').pack(pady=(0, 20))
+        
+        tk.Label(main_frame, text=f"Servidor: {self.server_url}", font=('Arial', 10), 
+                fg='#3498db', bg='#2c3e50').pack(pady=(0, 30))
+        
+        button_frame = tk.Frame(main_frame, bg='#2c3e50')
+        button_frame.pack(pady=20)
+        
+        tk.Button(button_frame, text="ESCRIBIR TARJETAS\n(IT)", font=('Arial', 14, 'bold'), 
+                 bg='#e67e22', fg='white', width=15, height=3, 
+                 command=self.modo_escritura).pack(side='left', padx=20)
+        
+        tk.Button(button_frame, text="LEER TARJETAS\n(Admin)", font=('Arial', 14, 'bold'), 
+                 bg='#9b59b6', fg='white', width=15, height=3, 
+                 command=self.modo_lectura).pack(side='left', padx=20)
+        
+        tk.Button(main_frame, text="Cambiar Servidor", font=('Arial', 10), 
+                 bg='#95a5a6', fg='white', width=15, height=1, 
+                 command=self.show_server_config).pack(pady=(30, 0))
+    
+    def modo_escritura(self):
+        """Modo IT - Escribir tarjetas con UIDs pendientes"""
+        for widget in self.root.winfo_children():
+            widget.destroy()
+        
+        main_frame = tk.Frame(self.root, bg='#2c3e50')
+        main_frame.place(relx=0.5, rely=0.5, anchor='center')
+        
+        tk.Label(main_frame, text="Modo IT - Escribir Tarjetas", font=('Arial', 20, 'bold'), 
+                fg='white', bg='#2c3e50').pack(pady=(0, 20))
+        
+        self.status_label = tk.Label(main_frame, text="Obteniendo UIDs pendientes...", 
+                                   font=('Arial', 14), fg='#f39c12', bg='#2c3e50')
+        self.status_label.pack(pady=20)
+        
+        tk.Button(main_frame, text="Volver", font=('Arial', 11), bg='#95a5a6', fg='white', 
+                 width=15, height=2, command=self.show_main_menu).pack(pady=20)
+        
+        # Obtener UIDs pendientes y escribir
+        threading.Thread(target=self.proceso_escritura, daemon=True).start()
+    
+    def modo_lectura(self):
+        """Modo Admin - Leer tarjetas para 2FA"""
+        for widget in self.root.winfo_children():
+            widget.destroy()
+        
+        main_frame = tk.Frame(self.root, bg='#2c3e50')
+        main_frame.place(relx=0.5, rely=0.5, anchor='center')
+        
+        tk.Label(main_frame, text="Modo Admin - Autenticacion 2FA", font=('Arial', 20, 'bold'), 
+                fg='white', bg='#2c3e50').pack(pady=(0, 20))
+        
+        tk.Label(main_frame, text="Ingrese el navegador ID (GUID):", font=('Arial', 12), 
+                fg='white', bg='#2c3e50').pack(pady=(0, 10))
+        
+        self.navid_entry = tk.Entry(main_frame, font=('Arial', 12), width=40, justify='center')
+        self.navid_entry.pack(pady=10)
+        
+        self.status_label = tk.Label(main_frame, text="Ingrese el navegador ID", 
+                                   font=('Arial', 14), fg='#95a5a6', bg='#2c3e50')
+        self.status_label.pack(pady=20)
+        
+        button_frame = tk.Frame(main_frame, bg='#2c3e50')
+        button_frame.pack(pady=20)
+        
+        tk.Button(button_frame, text="Iniciar Lectura", font=('Arial', 12), bg='#27ae60', fg='white', 
+                 width=12, height=2, command=self.iniciar_lectura_2fa).pack(side='left', padx=10)
+        
+        tk.Button(button_frame, text="Volver", font=('Arial', 11), bg='#95a5a6', fg='white', 
+                 width=15, height=2, command=self.show_main_menu).pack(side='left', padx=10)
+    
+    def proceso_escritura(self):
+        """Proceso de escritura IT"""
+        if not HARDWARE_AVAILABLE or not self.reader:
+            self.root.after(0, lambda: messagebox.showerror("Error", "Hardware no disponible"))
+            return
+        
+        try:
+            # Obtener UIDs pendientes del servidor
+            response = requests.get(f"{self.server_url}/api/tarjeta/pendientes", timeout=10)
+            
+            if response.status_code != 200:
+                self.root.after(0, lambda: self.status_label.config(
+                    text="Error obteniendo UIDs pendientes", fg='#e74c3c'))
+                return
+            
+            uids_pendientes = response.json()
+            
+            if not uids_pendientes:
+                self.root.after(0, lambda: self.status_label.config(
+                    text="No hay UIDs pendientes para grabar", fg='#f39c12'))
+                return
+            
+            uid_actual = uids_pendientes[0]  # Tomar el primero
+            self.root.after(0, lambda: self.status_label.config(
+                text=f"Acerque tarjeta para grabar UID: {uid_actual}", fg='#3498db'))
+            
+            # Esperar tarjeta y escribir
+            timeout = 30
+            start_time = time.time()
+            
+            while (time.time() - start_time) < timeout:
+                if self.reader.find_card():
+                    self.root.after(0, lambda: self.status_label.config(
+                        text="Tarjeta detectada, escribiendo...", fg='#f39c12'))
+                    
+                    if self.reader.write_text_to_card(uid_actual):
+                        # Confirmar al servidor
+                        confirm_response = requests.post(
+                            f"{self.server_url}/api/tarjeta/confirmar",
+                            data={'uidLeido': uid_actual},
+                            timeout=10
+                        )
+                        
+                        if confirm_response.status_code == 200:
+                            self.root.after(0, lambda: self.status_label.config(
+                                text="Tarjeta grabada y confirmada correctamente!", fg='#27ae60'))
+                        else:
+                            self.root.after(0, lambda: self.status_label.config(
+                                text="Tarjeta grabada pero error en confirmacion", fg='#e67e22'))
+                    else:
+                        self.root.after(0, lambda: self.status_label.config(
+                            text="Error escribiendo en la tarjeta", fg='#e74c3c'))
+                    return
+                
+                time.sleep(0.5)
+            
+            self.root.after(0, lambda: self.status_label.config(
+                text="Timeout - No se detecto tarjeta", fg='#e74c3c'))
+            
+        except Exception as e:
+            self.root.after(0, lambda: messagebox.showerror("Error", f"Error: {str(e)}"))
+    
+    def iniciar_lectura_2fa(self):
+        """Iniciar proceso de lectura 2FA"""
+        navid = self.navid_entry.get().strip()
+        
+        if not navid:
+            messagebox.showerror("Error", "Ingrese el navegador ID")
+            return
+        
+        self.nav_id = navid
+        self.status_label.config(text="Acerque su tarjeta al lector...", fg='#3498db')
+        
+        threading.Thread(target=self.proceso_lectura_2fa, daemon=True).start()
+    
+    def proceso_lectura_2fa(self):
+        """Proceso de lectura para 2FA"""
+        if not HARDWARE_AVAILABLE or not self.reader:
+            self.root.after(0, lambda: messagebox.showerror("Error", "Hardware no disponible"))
+            return
+        
+        try:
+            self.root.after(0, lambda: self.status_label.config(
+                text="Esperando tarjeta...", fg='#f39c12'))
+            
+            timeout = 30
+            start_time = time.time()
+            
+            while (time.time() - start_time) < timeout:
+                uid = self.reader.read_card_uid()
+                if uid:
+                    self.root.after(0, lambda: self.status_label.config(
+                        text=f"Tarjeta leida: {uid}, verificando...", fg='#f39c12'))
+                    
+                    # Confirmar 2FA con el servidor
+                    response = requests.post(
+                        f"{self.server_url}/Login/Confirmar2FA",
+                        data={
+                            'navId': self.nav_id,
+                            'uid': uid
+                        },
+                        timeout=10
+                    )
+                    
+                    if response.status_code == 200:
+                        self.root.after(0, lambda: self.status_label.config(
+                            text="Autenticacion exitosa!", fg='#27ae60'))
+                    else:
+                        self.root.after(0, lambda: self.status_label.config(
+                            text="Tarjeta no autorizada", fg='#e74c3c'))
+                    return
+                
+                time.sleep(0.5)
+            
+            self.root.after(0, lambda: self.status_label.config(
+                text="Timeout - No se detecto tarjeta", fg='#e74c3c'))
+            
+        except Exception as e:
+            self.root.after(0, lambda: messagebox.showerror("Error", f"Error: {str(e)}"))
+    
+    def run(self):
+        print("=== QuickTable NFC - VERSION CORREGIDA ===")
+        print(f"Hardware RC522: {'OK' if HARDWARE_AVAILABLE and self.reader else 'No disponible'}")
+        print("Endpoints corregidos para integración real con .NET")
+        print("=" * 50)
+        
+        self.show_server_config()
+        
+        try:
+            self.root.mainloop()
+        finally:
+            if HARDWARE_AVAILABLE and self.reader:
+                self.reader.cleanup()
+                print("Hardware limpiado")
+
+if __name__ == '__main__':
+    app = NFCApp()
+    app.run()

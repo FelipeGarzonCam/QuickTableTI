@@ -29,18 +29,41 @@ namespace QuickTableProyect.Interface
             string rol = HttpContext.Session.GetString("Rol");
             if (!string.IsNullOrEmpty(rol))
             {
+                // CRÍTICO: Verificar si es Admin y requiere 2FA
+                if (rol == "Admin")
+                {
+                    string empIdString = HttpContext.Session.GetString("Id");
+                    if (int.TryParse(empIdString, out int empId))
+                    {
+                        // Verificar si tiene 2FA pendiente
+                        bool tiene2FAPendiente = _ctx.Codigos2FA.Any(c =>
+                            c.EmpleadoId == empId &&
+                            !c.Confirmado &&
+                            c.Expiracion > DateTime.Now);
+
+                        if (tiene2FAPendiente)
+                        {
+                            // Forzar logout y redirigir a login
+                            HttpContext.Session.Clear();
+                            ViewBag.Error = "Debe completar la autenticación 2FA";
+                            return View();
+                        }
+                    }
+                }
+
                 return rol switch
                 {
                     "Admin" => RedirectToAction("Index", "Administrador"),
                     "Mesero" => RedirectToAction("Index", "Mesero"),
                     "Cocina" => RedirectToAction("Index", "Cocina"),
                     "Cajero" => RedirectToAction("Index", "Caja"),
-                    "IT" => RedirectToAction("Index", "IT"),
+                    "TI" => RedirectToAction("Index", "TI"),  
                     _ => RedirectToAction("Index", "Login")
                 };
             }
             return View();
         }
+
 
         // ----------- POST /Login/Autenticar --------------
         [HttpPost]
@@ -94,7 +117,7 @@ namespace QuickTableProyect.Interface
                 "Mesero" => Url.Action("Index", "Mesero"),
                 "Cocina" => Url.Action("Index", "Cocina"),
                 "Cajaero" => Url.Action("Index", "Caja"),
-                "IT" => Url.Action("Index", "IT"),
+                "TI" => Url.Action("Index", "Ti"),
                 _ => Url.Action("Index", "Login")
             };
             return Json(new { success = true, redirectUrl = url });
@@ -104,22 +127,30 @@ namespace QuickTableProyect.Interface
         [HttpPost]
         public IActionResult Confirmar2FA(Guid navId, string uid)
         {
-            var registro = _ctx.Codigos2FA
-                               .Include(c => c.Empleado)            // Include de EF6 :contentReference[oaicite:2]{index=2}
-                               .FirstOrDefault(c => c.NavegadorId == navId &&
-                                                    c.Expiracion > DateTime.Now);
+            var registro = _ctx.Codigos2FA  // Cambiar ctx por _ctx
+                .Include(c => c.Empleado)
+                .FirstOrDefault(c => c.NavegadorId == navId && c.Expiracion > DateTime.Now);
 
             if (registro == null || registro.Confirmado)
-                return BadRequest();                               // 400 :contentReference[oaicite:3]{index=3}
+            {
+                return BadRequest(); // 400
+            }
 
-            var tarjeta = _ctx.TarjetasRC.FirstOrDefault(t => t.Uid == uid && t.Activa);
+            // VERIFICACIÓN OBLIGATORIA DE TARJETA NFC
+            var tarjeta = _ctx.TarjetasRC.FirstOrDefault(t => t.Uid == uid && t.Activa);  // Cambiar ctx por _ctx
             if (tarjeta == null || tarjeta.EmpleadoId != registro.EmpleadoId)
-                return StatusCode(401);                           // 401 :contentReference[oaicite:4]{index=4}
+            {
+                return Unauthorized(); // 401 - Tarjeta inválida o no coincide
+            }
 
+            // Solo aquí confirmamos el 2FA
             registro.Confirmado = true;
-            _ctx.SaveChanges();
-            return Ok();                                          // 200
+            _ctx.SaveChanges();  // Cambiar ctx por _ctx
+
+            return Ok(); // 200
         }
+
+
 
         // ----------- GET /Login/Check2FA --------------
         [HttpGet]

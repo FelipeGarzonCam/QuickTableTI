@@ -190,7 +190,7 @@ namespace QuickTableProyect.Controllers
             {
                 return RedirectToAction("Index", "Login");
             }
-            ViewBag.Roles = new List<string> { "Mesero", "Cocina", "Admin", "Cajero" };
+            ViewBag.Roles = new List<string> { "Mesero", "Cocina", "Cajero" };
             return View();
         }
 
@@ -207,7 +207,7 @@ namespace QuickTableProyect.Controllers
                 _empleadoService.CrearEmpleado(empleado);
                 return RedirectToAction(nameof(ModificarEmpleados));
             }
-            ViewBag.Roles = new List<string> { "Mesero", "Cocina", "Admin", "Cajero" };
+            ViewBag.Roles = new List<string> { "Mesero", "Cocina", "Cajero" };
             return View(empleado);
         }
 
@@ -219,7 +219,7 @@ namespace QuickTableProyect.Controllers
                 return RedirectToAction("Index", "Login");
             }
             var empleado = _empleadoService.ObtenerEmpleadoPorId(id);
-            ViewBag.Roles = new List<string> { "Mesero", "Cocina", "Admin", "Cajero" };
+            ViewBag.Roles = new List<string> { "Mesero", "Cocina", "Cajero" };
             return View(empleado);
         }
 
@@ -236,7 +236,7 @@ namespace QuickTableProyect.Controllers
                 _empleadoService.ActualizarEmpleado(empleado);
                 return RedirectToAction(nameof(ModificarEmpleados));
             }
-            ViewBag.Roles = new List<string> { "Mesero", "Cocina", "Admin", "Cajero" };
+            ViewBag.Roles = new List<string> { "Mesero", "Cocina", "Cajero" };
             return View(empleado);
         }
 

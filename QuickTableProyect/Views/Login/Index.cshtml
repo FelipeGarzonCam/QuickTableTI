@@ -76,38 +76,39 @@
                 type: 'POST',
                 dataType: 'json',
                 data: { nombre: nombre, contrasena: contrasena },
-                success: function (response) {
-                    if (response.success) {
-                        // Caso de éxito en autenticación básica
-                        toastr.success('Inicio de sesión exitoso.', 'Éxito');
+                    success: function (response) {
+                        if (response.success) {
+                            // NO mostrar "sesión iniciada" si requiere 2FA
+                            if (!response.requiere2FA) {
+                                toastr.success("Inicio de sesión exitoso.", "Éxito");
+                                setTimeout(function() {
+                                    window.location.href = response.redirectUrl;
+                                }, 500);
+                            } else {
+                                // Solo mostrar el modal, SIN mensaje de éxito
+                                $("#lblCode").text(response.code);
+                                $("#modal2FA").modal('show');
 
-                        if (!response.requiere2FA) {
-                            // Si no requiere 2FA, redirige directamente
-                            setTimeout(function () {
-                                window.location.href = response.redirectUrl;
-                            }, 500);
+                                // Inicia polling para verificar la autenticación por Raspberry
+                                const navId = response.nav;
+                                const timer = setInterval(function() {
+                                    $.get(Url.Action("Check2FA", "Login"), { navId })
+                                    .done(function(ok) {
+                                        if (ok) {
+                                            clearInterval(timer);
+                                            toastr.success("Autenticación 2FA exitosa.", "Éxito");
+                                            setTimeout(function() {
+                                                window.location = "/Administrador";
+                                            }, 1000);
+                                        }
+                                    });
+                                }, 3000);
+                            }
                         } else {
-                            // Si requiere 2FA, muestra el modal con el código
-                            $("#lblCode").text(response.code);
-                            $("#modal2FA").modal("show");
-
-                            // Inicia polling para verificar la autenticación por Raspberry
-                            const navId = response.nav;
-                            const timer = setInterval(function () {
-                                $.get("@Url.Action("Check2FA", "Login")", { navId })
-                                  .done(function (ok) {
-                                      if (ok) {
-                                          clearInterval(timer);
-                                          window.location = response.redirectUrl;
-                                      }
-                                  });
-                            }, 3000);
+                            toastr.error(response.message, "Error");
                         }
-                    } else {
-                        // Error en autenticación
-                        toastr.error(response.message, 'Error');
-                    }
-                },
+                    },
+
                 error: function () {
                     toastr.error('Ocurrió un error al procesar la solicitud.', 'Error');
                 }

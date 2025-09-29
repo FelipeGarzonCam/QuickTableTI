@@ -1,0 +1,349 @@
+﻿@model IEnumerable<QuickTableProyect.Dominio.TarjetaRC>
+@{
+    ViewBag.Title = "Gestión de Tarjetas";
+    Layout = "~/Views/Shared/_Layout.cshtml";
+}
+<h1 class="mb-4">@ViewBag.Title</h1>
+
+@if (TempData["Ok"] != null)
+{
+    <div class="alert alert-success">@TempData["Ok"]</div>
+}
+
+<!-- Mostrar código de sesión si hay una tarjeta pendiente -->
+@if (ViewBag.SessionCode != null)
+{
+    <div class="alert alert-info">
+        <h5><i class="fas fa-mobile-alt"></i> Código de Sesión para Raspberry Pi</h5>
+        <h2 class="text-center"><strong>@ViewBag.SessionCode</strong></h2>
+        <p>Ingrese este código en la Raspberry Pi para grabar la tarjeta del administrador: <strong>@ViewBag.AdminNombre</strong></p>
+        <p>UID a grabar: <code>@ViewBag.UID</code></p>
+
+        <!-- Polling para verificar si la tarjeta ya fue grabada -->
+        <div id="statusGrabacion">
+            <span class="spinner-border spinner-border-sm"></span> Esperando que coloque la tarjeta en el lector...
+        </div>
+    </div>
+
+    <script>
+        const uid = "@ViewBag.UID";
+        const timer = setInterval(() => {
+            fetch(`/api/tarjeta/estado?uid=${uid}`)
+              .then(r => r.json())
+              .then(ok => {
+                  if (ok) {
+                      clearInterval(timer);
+                      document.getElementById('statusGrabacion').innerHTML =
+                          '<i class="fas fa-check text-success"></i> Tarjeta grabada correctamente';
+                      // Recargar la página en 2 segundos para actualizar la tabla
+                      setTimeout(() => location.reload(), 2000);
+                  }
+              })
+              .catch(err => console.log('Polling error:', err));
+        }, 2000);
+    </script>
+}
+
+<div class="mb-3">
+    <a asp-action="CrearAdministrador" class="btn btn-success">
+        <i class="fas fa-user-plus"></i> Crear Administrador
+    </a>
+</div>
+
+<table class="table table-striped table-bordered mt-3">
+    <thead class="table-dark">
+        <tr>
+            <th>#</th>
+            <th>UID</th>
+            <th>Administrador</th>
+            <th>Fecha Asignación</th>
+            <th>Estado</th>
+            <th>Acciones</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var t in Model)
+        {
+            <tr>
+                <td>@t.Id</td>
+                <td><code>@t.Uid</code></td>
+                <td>@(t.Empleado?.Nombre ?? "—")</td>
+                <td>@(t.FechaAsignacion?.ToString("dd/MM/yyyy HH:mm") ?? "—")</td>
+                <td>
+                    @if (t.Activa)
+                    {
+                        <span class="badge bg-success"><i class="fas fa-check"></i> Activa</span>
+                    }
+                    else
+                    {
+                        <span class="badge bg-warning"><i class="fas fa-clock"></i> Pendiente</span>
+                    }
+                </td>
+                <td>
+                    <div class="btn-group" role="group">
+                        <!-- Cambiar Contraseña -->
+                        <button class="btn btn-warning btn-sm" onclick="mostrarModalCambiarClave(@t.EmpleadoId, '@t.Empleado.Nombre')" title="Cambiar Contraseña">
+                            <i class="fas fa-key"></i>
+                        </button>
+
+                        <!-- Regenerar Tarjeta (solo si está activa) -->
+                        @if (t.Activa)
+                        {
+                            <button class="btn btn-info btn-sm" onclick="regenerarTarjeta(@t.EmpleadoId)" title="Regenerar Tarjeta">
+                                <i class="fas fa-redo"></i>
+                            </button>
+                        }
+
+                        <!-- Eliminar -->
+                        <button class="btn btn-danger btn-sm" onclick="mostrarModalEliminar(@t.EmpleadoId, '@t.Empleado.Nombre')" title="Eliminar Administrador">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </div>
+                </td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+<!-- Modal Cambiar Contraseña -->
+<div class="modal fade" id="modalCambiarClave" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Cambiar Contraseña</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="formCambiarClave">
+                <div class="modal-body">
+                    <p>Administrador: <strong id="nombreAdmin"></strong></p>
+                    <input type="hidden" id="adminIdCambio">
+                    <div class="mb-3">
+                        <label class="form-label">Nueva Contraseña</label>
+                        <input type="password" id="nuevaClave" class="form-control" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Confirmar Contraseña</label>
+                        <input type="password" id="confirmarClave" class="form-control" required>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="submit" class="btn btn-warning">Cambiar Contraseña</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Modal Confirmar Eliminación -->
+<div class="modal fade" id="modalEliminar" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Confirmar Eliminación</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p>¿Está seguro que desea eliminar al administrador <strong id="nombreEliminar"></strong>?</p>
+                <p class="text-danger"><small>Esta acción no se puede deshacer y eliminará también su tarjeta asociada.</small></p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                <button type="button" class="btn btn-danger" onclick="confirmarEliminacion()">Eliminar</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let adminIdEliminar = 0;
+    let modalCambiarClaveInstance = null;
+    let modalEliminarInstance = null;
+
+    // Función personalizada para mostrar mensajes (sin toastr)
+    function mostrarMensaje(mensaje, tipo) {
+        const alertClass = tipo === 'success' ? 'alert-success' : 'alert-danger';
+        const html = `<div class="alert ${alertClass} alert-dismissible fade show" role="alert">
+                        ${mensaje}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                      </div>`;
+
+        // Insertar al inicio del contenido
+        const container = document.querySelector('main, .container, .container-fluid, body');
+        if (container) {
+            container.insertAdjacentHTML('afterbegin', html);
+
+            // Auto-remove después de 5 segundos
+            setTimeout(() => {
+                const alert = container.querySelector('.alert');
+                if (alert) alert.remove();
+            }, 5000);
+        }
+    }
+
+    function mostrarModalCambiarClave(id, nombre) {
+        document.getElementById('adminIdCambio').value = id;
+        document.getElementById('nombreAdmin').textContent = nombre;
+        document.getElementById('nuevaClave').value = '';
+        document.getElementById('confirmarClave').value = '';
+
+        // Crear instancia del modal y mostrar
+        modalCambiarClaveInstance = new bootstrap.Modal(document.getElementById('modalCambiarClave'));
+        modalCambiarClaveInstance.show();
+    }
+
+    function mostrarModalEliminar(id, nombre) {
+        adminIdEliminar = id;
+        document.getElementById('nombreEliminar').textContent = nombre;
+
+        // Crear instancia del modal y mostrar
+        modalEliminarInstance = new bootstrap.Modal(document.getElementById('modalEliminar'));
+        modalEliminarInstance.show();
+    }
+
+    // Envío del formulario de cambio de clave
+    document.getElementById('formCambiarClave').addEventListener('submit', function(e) {
+        e.preventDefault();
+
+        const nueva = document.getElementById('nuevaClave').value;
+        const confirmar = document.getElementById('confirmarClave').value;
+        const adminId = document.getElementById('adminIdCambio').value;
+
+        if (nueva !== confirmar) {
+            mostrarMensaje('Las contraseñas no coinciden', 'error');
+            return;
+        }
+
+        if (nueva.length < 4) {
+            mostrarMensaje('La contraseña debe tener al menos 4 caracteres', 'error');
+            return;
+        }
+
+        // Enviar al servidor
+        fetch('@Url.Action("CambiarClaveAdmin", "TI")', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ adminId: parseInt(adminId), nuevaClave: nueva })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                mostrarMensaje('Contraseña actualizada correctamente', 'success');
+                if (modalCambiarClaveInstance) {
+                    modalCambiarClaveInstance.hide();
+                }
+            } else {
+                mostrarMensaje(data.message || 'Error al cambiar contraseña', 'error');
+            }
+        })
+        .catch(error => {
+            mostrarMensaje('Error de conexión', 'error');
+            console.error('Error:', error);
+        });
+    });
+
+    function confirmarEliminacion() {
+        fetch('@Url.Action("EliminarAdmin", "TI")', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ adminId: adminIdEliminar })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                mostrarMensaje('Administrador eliminado correctamente', 'success');
+                setTimeout(() => location.reload(), 1500);
+            } else {
+                mostrarMensaje(data.message || 'Error al eliminar administrador', 'error');
+            }
+            if (modalEliminarInstance) {
+                modalEliminarInstance.hide();
+            }
+        })
+        .catch(error => {
+            mostrarMensaje('Error de conexión', 'error');
+            console.error('Error:', error);
+        });
+    }
+
+    function regenerarTarjeta(adminId) {
+        if (confirm('¿Regenerar la tarjeta? Se invalidará la anterior y deberá grabarla nuevamente.')) {
+            fetch('@Url.Action("RegenerarTarjeta", "TI")', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ adminId: adminId })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    mostrarMensaje(`Tarjeta regenerada. Nuevo UID: ${data.uid}`, 'success');
+                    if (data.sessionCode) {
+                        mostrarMensaje(`Código de sesión: ${data.sessionCode}`, 'success');
+                    }
+                    setTimeout(() => location.reload(), 2000);
+                } else {
+                    mostrarMensaje(data.message || 'Error al regenerar tarjeta', 'error');
+                }
+            })
+            .catch(error => {
+                mostrarMensaje('Error de conexión', 'error');
+                console.error('Error:', error);
+            });
+        }
+    }
+
+    // SOLUCION PARA LOS BOTONES DE CANCELAR
+    document.addEventListener('DOMContentLoaded', function() {
+        // Botones de cerrar del modal de cambiar clave
+        const modalCambiarClave = document.getElementById('modalCambiarClave');
+        if (modalCambiarClave) {
+            modalCambiarClave.querySelectorAll('[data-bs-dismiss="modal"]').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    if (modalCambiarClaveInstance) {
+                        modalCambiarClaveInstance.hide();
+                    } else {
+                        modalCambiarClave.style.display = 'none';
+                        document.body.classList.remove('modal-open');
+                        const backdrop = document.querySelector('.modal-backdrop');
+                        if (backdrop) backdrop.remove();
+                    }
+                });
+            });
+        }
+
+        // Botones de cerrar del modal de eliminar
+        const modalEliminar = document.getElementById('modalEliminar');
+        if (modalEliminar) {
+            modalEliminar.querySelectorAll('[data-bs-dismiss="modal"]').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    if (modalEliminarInstance) {
+                        modalEliminarInstance.hide();
+                    } else {
+                        modalEliminar.style.display = 'none';
+                        document.body.classList.remove('modal-open');
+                        const backdrop = document.querySelector('.modal-backdrop');
+                        if (backdrop) backdrop.remove();
+                    }
+                });
+            });
+        }
+
+        // Cerrar modal al hacer clic en el backdrop
+        modalCambiarClave?.addEventListener('click', function(e) {
+            if (e.target === modalCambiarClave) {
+                if (modalCambiarClaveInstance) {
+                    modalCambiarClaveInstance.hide();
+                }
+            }
+        });
+
+        modalEliminar?.addEventListener('click', function(e) {
+            if (e.target === modalEliminar) {
+                if (modalEliminarInstance) {
+                    modalEliminarInstance.hide();
+                }
+            }
+        });
+    });
+</script>
+
