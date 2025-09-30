@@ -10,64 +10,6 @@
     <div class="alert alert-success">@TempData["Ok"]</div>
 }
 
-<!-- Mostrar código de sesión si hay una tarjeta pendiente -->
-@if (ViewBag.SessionCode != null)
-{
-    <div class="alert alert-info">
-        <h5><i class="fas fa-mobile-alt"></i> Código de Sesión para Raspberry Pi</h5>
-        <h2 class="text-center"><strong>@ViewBag.SessionCode</strong></h2>
-        <p>Ingrese este código en la Raspberry Pi para grabar la tarjeta del administrador: <strong>@ViewBag.AdminNombre</strong></p>
-        <p>UID a grabar: <code>@ViewBag.UID</code></p>
-
-        <!-- Polling para verificar si la tarjeta ya fue grabada -->
-        <div id="statusGrabacion">
-            <span class="spinner-border spinner-border-sm"></span> Esperando que coloque la tarjeta en el lector...
-        </div>
-    </div>
-
-    <script>
-        const uid = "@ViewBag.UID";
-        let pollCount = 0;
-        const maxPolls = 60; // 2 minutos máximo
-
-        const timer = setInterval(() => {
-            pollCount++;
-
-            fetch(`/api/tarjeta/estado?uid=${uid}`)
-              .then(r => r.json())
-              .then(ok => {
-                  if (ok) {
-                      clearInterval(timer);
-                      document.getElementById('statusGrabacion').innerHTML =
-                          '<i class="fas fa-check text-success"></i> ¡Tarjeta grabada y activada correctamente!';
-
-                      // Mostrar mensaje de éxito
-                      mostrarMensaje('¡Éxito! La tarjeta del administrador ha sido activada correctamente.', 'success');
-
-                      // Auto-recargar después de 2 segundos
-                      setTimeout(() => {
-                          location.reload();
-                      }, 2000);
-
-                  } else if (pollCount >= maxPolls) {
-                      // Timeout después de 2 minutos
-                      clearInterval(timer);
-                      document.getElementById('statusGrabacion').innerHTML =
-                          '<i class="fas fa-exclamation-triangle text-warning"></i> Tiempo agotado. Verifique la Raspberry Pi.';
-                  }
-              })
-              .catch(err => {
-                  console.log('Polling error:', err);
-                  if (pollCount >= maxPolls) {
-                      clearInterval(timer);
-                      document.getElementById('statusGrabacion').innerHTML =
-                          '<i class="fas fa-times text-danger"></i> Error de conexión.';
-                  }
-              });
-        }, 2000); // Cada 2 segundos
-    </script>
-
-}
 
 <div class="mb-3">
     <a asp-action="CrearAdministrador" class="btn btn-success">

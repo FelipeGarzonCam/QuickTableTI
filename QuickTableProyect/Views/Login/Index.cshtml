@@ -9,7 +9,7 @@
         <div class="card">
             <div class="card-body login-card-body">
                 <p class="login-box-msg">LOGIN</p>
-                <form id="loginForm" method="post" action='@Url.Action("Autenticar","Login")'>
+                <form id="loginForm" method="post" action='@Url.Action("Autenticar", "Login")'>
                     <div class="input-group mb-3">
                         <input type="text" name="nombre" class="form-control" placeholder="Usuario" required>
                         <div class="input-group-append">
@@ -36,26 +36,32 @@
         </div>
     </div>
 </div>
+
 <!-- Modal de 2FA -->
 <div class="modal fade" id="modal2FA" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title">Segundo Paso de Autenticación</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"
-                        aria-label="Close"></button>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
-            <div class="modal-body">
-                <p>Introduce en la Raspberry el siguiente código y luego acerca tu tarjeta RC&nbsp;522:</p>
-                <h1 id="lblCode" class="display-5 text-center fw-bold"></h1>
-                <p class="text-center text-muted mb-0">El código expirará en 10&nbsp;minutos.</p>
+            <div class="modal-body text-center">
+                <p>Introduce en la Raspberry el siguiente código y luego acerca tu tarjeta NFC:</p>
+                <h1 id="lblCode" class="display-5 text-center fw-bold text-primary"></h1>
+                <div class="mt-3">
+                    <div class="spinner-border spinner-border-sm text-info" role="status"></div>
+                    <span class="text-muted ms-2">Esperando autenticación con tarjeta...</span>
+                </div>
+                <p class="text-center text-muted mb-0 mt-3">El código expirará en 10 minutos.</p>
             </div>
         </div>
     </div>
 </div>
+
 <script src="~/AdminLTE/plugins/jquery/jquery.min.js"></script>
 <script src="~/AdminLTE/plugins/toastr/toastr.min.js"></script>
 <link rel="stylesheet" href="~/AdminLTE/plugins/toastr/toastr.min.css" />
+
 <script>
     $(function () {
         // Manejador del formulario de login
@@ -76,43 +82,79 @@
                 type: 'POST',
                 dataType: 'json',
                 data: { nombre: nombre, contrasena: contrasena },
-                    success: function (response) {
-                        if (response.success) {
-                            // NO mostrar "sesión iniciada" si requiere 2FA
-                            if (!response.requiere2FA) {
-                                toastr.success("Inicio de sesión exitoso.", "Éxito");
-                                setTimeout(function() {
-                                    window.location.href = response.redirectUrl;
-                                }, 500);
-                            } else {
-                                // Solo mostrar el modal, SIN mensaje de éxito
-                                $("#lblCode").text(response.code);
-                                $("#modal2FA").modal('show');
-
-                                // Inicia polling para verificar la autenticación por Raspberry
-                                const navId = response.nav;
-                                const timer = setInterval(function() {
-                                    $.get(Url.Action("Check2FA", "Login"), { navId })
-                                    .done(function(ok) {
-                                        if (ok) {
-                                            clearInterval(timer);
-                                            toastr.success("Autenticación 2FA exitosa.", "Éxito");
-                                            setTimeout(function() {
-                                                window.location = "/Administrador";
-                                            }, 1000);
-                                        }
-                                    });
-                                }, 3000);
-                            }
+                success: function (response) {
+                    if (response.success) {
+                        // SI NO requiere 2FA, redirigir directamente
+                        if (!response.requiere2FA) {
+                            toastr.success("Inicio de sesión exitoso.", "Éxito");
+                            setTimeout(function() {
+                                window.location.href = response.redirectUrl;
+                            }, 500);
                         } else {
-                            toastr.error(response.message, "Error");
-                        }
-                    },
+                            // SI requiere 2FA, mostrar modal y empezar polling
+                            $("#lblCode").text(response.code);
+                            $("#modal2FA").modal('show');
 
+                            // Inicia polling CORREGIDO para verificar 2FA
+                            const navId = response.nav;
+                            let pollCount = 0;
+                            const maxPolls = 40; // 2 minutos máximo (40 * 3000ms)
+
+                            const timer = setInterval(function() {
+                                pollCount++;
+
+                                $.get('@Url.Action("Check2FA", "Login")', { navId: navId })
+                                .done(function(ok) {
+                                    if (ok) {
+                                        clearInterval(timer);
+                                        $("#modal2FA").modal('hide');
+                                        toastr.success("Autenticación 2FA exitosa.", "Éxito");
+                                        setTimeout(function() {
+                                            // ✅ RUTA CORREGIDA
+                                            window.location.href = '@Url.Action("Index", "Administrador")';
+                                        }, 1000);
+                                    } else if (pollCount >= maxPolls) {
+                                        // Timeout después de 2 minutos
+                                        clearInterval(timer);
+                                        toastr.error("Tiempo agotado para 2FA. Inténtelo de nuevo.", "Error");
+                                        $("#modal2FA").modal('hide');
+                                    }
+                                })
+                                .fail(function(xhr, status, error) {
+                                    console.log('Error verificando 2FA:', error);
+                                    if (pollCount >= maxPolls) {
+                                        clearInterval(timer);
+                                        toastr.error("Error de conexión. Inténtelo de nuevo.", "Error");
+                                        $("#modal2FA").modal('hide');
+                                    }
+                                });
+                            }, 3000); // Verificar cada 3 segundos
+
+                            // Timeout de seguridad adicional
+                            setTimeout(function() {
+                                if (timer) {
+                                    clearInterval(timer);
+                                    toastr.warning("Sesión 2FA expirada.", "Advertencia");
+                                    $("#modal2FA").modal('hide');
+                                }
+                            }, 600000); // 10 minutos
+                        }
+                    } else {
+                        toastr.error(response.message, "Error");
+                    }
+                },
                 error: function () {
                     toastr.error('Ocurrió un error al procesar la solicitud.', 'Error');
                 }
             });
+        });
+
+        // Cerrar modal si se hace clic en la X
+        $('#modal2FA').on('hidden.bs.modal', function () {
+            // Limpiar cualquier timer activo
+            if (typeof timer !== 'undefined') {
+                clearInterval(timer);
+            }
         });
     });
 </script>

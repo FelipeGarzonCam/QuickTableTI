@@ -142,8 +142,7 @@ namespace QuickTableProyect.Interface
                                        t.Uid == textoEscrito.Trim());      // UID que escribimos
 
                 if (tarjeta == null)
-                {
-                    Console.WriteLine($"❌ Tarjeta no válida - Físico: {uidFisico}, Escrito: {textoEscrito}");
+                {                    
                     return BadRequest("Tarjeta no autorizada");
                 }
 
@@ -152,8 +151,7 @@ namespace QuickTableProyect.Interface
                 if (codigo != null)
                 {
                     codigo.Confirmado = true;
-                    _ctx.SaveChanges();
-                    Console.WriteLine($"✅ 2FA confirmado para admin {tarjeta.Empleado.Nombre}");
+                    _ctx.SaveChanges();                   
                     return Ok("2FA confirmado");
                 }
 

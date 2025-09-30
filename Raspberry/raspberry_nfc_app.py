@@ -197,7 +197,7 @@ class QuickTableNFCApp:
     
     def setup_window(self):
         self.root = tk.Tk()
-        self.root.title("QuickTable NFC - Pi 3 B+")
+        self.root.title("QuickTable NFC")
         self.root.geometry("800x600")
         self.root.resizable(False, False)
         self.root.configure(bg='#343a40')

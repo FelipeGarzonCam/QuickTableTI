@@ -45,11 +45,6 @@ namespace QuickTableProyect.Interface
                                           .OrderBy(t => t.Id)
                                           .ToList();
 
-            // Pasar información de sesión si hay una tarjeta pendiente
-            ViewBag.SessionCode = TempData["SessionCode"];
-            ViewBag.UID = TempData["UID"];
-            ViewBag.AdminNombre = TempData["AdminNombre"];
-
             return View(tarjetas);
         }
 
@@ -62,6 +57,9 @@ namespace QuickTableProyect.Interface
         {
             try
             {
+                // LIMPIAR códigos 2FA vencidos antes de crear
+                var vencidos = _ctx.Codigos2FA.Where(c => c.Expiracion < DateTime.Now).ToList();
+                _ctx.Codigos2FA.RemoveRange(vencidos);
                 // 1. Crear el usuario rol Admin
                 var admin = new Empleado
                 {
@@ -83,14 +81,8 @@ namespace QuickTableProyect.Interface
                     Activa = false  // IMPORTANTE: Inicia como no activa
                 });
                 _ctx.SaveChanges();
-
-                // 3. Generar código de sesión de 6 dígitos
-                string sessionCode = Math.Abs(HttpContext.Session.Id.GetHashCode()).ToString("000000")[..6];
-
-                TempData["SessionCode"] = sessionCode;
-                TempData["UID"] = uid;
-                TempData["AdminNombre"] = nombre;
-                TempData["Ok"] = $"Administrador {nombre} creado correctamente. Código de sesión: {sessionCode}";
+                
+                TempData["Ok"] = $"Administrador {nombre} creado correctamente. Recuerde Asignar Una Tarjeta";
 
                 return RedirectToAction(nameof(Index));
             }
@@ -137,29 +129,30 @@ namespace QuickTableProyect.Interface
                 if (admin == null)
                     return Json(new { success = false, message = "Administrador no encontrado" });
 
-                // Eliminar tarjeta asociada primero
+                // 1. LIMPIAR códigos 2FA del admin
+                var codigos2FA = _ctx.Codigos2FA.Where(c => c.EmpleadoId == data.adminId).ToList();
+                _ctx.Codigos2FA.RemoveRange(codigos2FA);
+
+                // 2. LIMPIAR tarjeta del admin
                 var tarjeta = _ctx.TarjetasRC.FirstOrDefault(t => t.EmpleadoId == data.adminId);
                 if (tarjeta != null)
-                    _ctx.TarjetasRC.Remove(tarjeta);
-
-                // Eliminar códigos 2FA pendientes
-                var codigos2FA = _ctx.Codigos2FA.Where(c => c.EmpleadoId == data.adminId).ToList();
-                foreach (var codigo in codigos2FA)
                 {
-                    _ctx.Codigos2FA.Remove(codigo);
+                    _ctx.TarjetasRC.Remove(tarjeta);
                 }
 
-                // Eliminar administrador
+                // 3. ELIMINAR el empleado
                 _ctx.Empleados.Remove(admin);
-                _ctx.SaveChanges();
 
-                return Json(new { success = true, message = "Administrador eliminado correctamente" });
+                _ctx.SaveChanges();
+              
+                return Json(new { success = true });
             }
             catch (Exception ex)
             {
-                return Json(new { success = false, message = $"Error: {ex.Message}" });
+                return Json(new { success = false, message = ex.Message });
             }
         }
+
 
         [HttpPost]
         public JsonResult RegenerarTarjeta([FromBody] AdminIdRequest data)
@@ -192,17 +185,12 @@ namespace QuickTableProyect.Interface
 
                 // Generar nuevo código de sesión para la regeneración
                 string sessionCode = Math.Abs(HttpContext.Session.Id.GetHashCode()).ToString("000000")[..6];
-
-                // Guardar en TempData para mostrar en la vista
-                TempData["SessionCode"] = sessionCode;
-                TempData["UID"] = nuevoUid;
-                TempData["AdminNombre"] = admin.Nombre;
+                
 
                 return Json(new
                 {
                     success = true,
-                    uid = nuevoUid,
-                    sessionCode = sessionCode,
+                    uid = nuevoUid,                    
                     message = "Tarjeta regenerada correctamente"
                 });
             }
