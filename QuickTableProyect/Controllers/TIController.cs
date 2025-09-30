@@ -7,6 +7,7 @@ using System.Data.Entity;
 using QuickTableProyect.Dominio;
 using QuickTableProyect.Persistencia.Datos;
 
+
 namespace QuickTableProyect.Interface
 {
     // Clases para recibir JSON correctamente (sin JsonElement)
@@ -30,6 +31,11 @@ namespace QuickTableProyect.Interface
             if (HttpContext.Session.GetString("Rol") != "TI")
                 ctx.Result = RedirectToAction("Index", "Login");
             base.OnActionExecuting(ctx);
+        }
+        public class SesionTiDto
+        {
+            public string uid { get; set; }
+            public string codigoSesion { get; set; }
         }
 
         /* ---------- LISTADO ---------- */
@@ -226,6 +232,32 @@ namespace QuickTableProyect.Interface
             }
             catch (Exception ex)
             {
+                return Json(new { success = false, message = ex.Message });
+            }
+        }
+
+        [HttpPost]
+        public JsonResult AsociarCodigoSesion([FromBody] SesionTiDto data)
+        {
+            try
+            {
+                // BUSCAR la tarjeta por UID y actualizarla
+                var tarjeta = _ctx.TarjetasRC.FirstOrDefault(t => t.Uid == data.uid && !t.Activa);
+
+                if (tarjeta == null)
+                    return Json(new { success = false, message = "Tarjeta no encontrada o ya activa" });
+
+                // GUARDAR el código en la tarjeta
+                tarjeta.CodigoSesion = data.codigoSesion;
+                _ctx.SaveChanges();
+
+                Console.WriteLine($" Código {data.codigoSesion} asociado con UID {data.uid}");
+
+                return Json(new { success = true });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($" Error: {ex.Message}");
                 return Json(new { success = false, message = ex.Message });
             }
         }

@@ -16,6 +16,9 @@ namespace QuickTableProyect.Dominio
 
         public int? EmpleadoId { get; set; }
         public Empleado? Empleado { get; set; }
+
+        public string? CodigoSesion { get; set; }
+        public string? UidFisico { get; set; }
     }
 
 }

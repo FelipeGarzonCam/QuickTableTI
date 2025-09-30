@@ -2,7 +2,7 @@
 using System.Linq;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Http;
-using System.Data.Entity; // ← IMPORTANTE: EF6, no EF Core
+using System.Data.Entity; // IMPORTANTE: EF6, no EF Core
 using QuickTableProyect.Dominio;
 using QuickTableProyect.Persistencia.Datos;
 
@@ -12,7 +12,7 @@ namespace QuickTableProyect.Interface.Api
     [Route("api/tarjeta")]
     public class TarjetaApiController : ControllerBase
     {
-        private readonly SistemaQuickTableContext _ctx = new();
+        private readonly SistemaQuickTableContext ctx = new();
 
         // 1. devuelve UIDs pendientes de grabar
         [HttpGet("pendientes")]
@@ -20,10 +20,11 @@ namespace QuickTableProyect.Interface.Api
         {
             try
             {
-                var lista = _ctx.TarjetasRC
-                                .Where(t => !t.Activa)
-                                .Select(t => t.Uid)
-                                .ToList();
+                var lista = ctx.TarjetasRC
+                    .Where(t => !t.Activa)
+                    .Select(t => t.Uid)
+                    .ToList();
+
                 return Ok(lista);
             }
             catch (Exception ex)
@@ -32,18 +33,24 @@ namespace QuickTableProyect.Interface.Api
             }
         }
 
-        // 2. Raspberry confirma grabación
+        // 2. Raspberry confirma grabación        
         [HttpPost("confirmar")]
         public IActionResult Confirmar([FromForm] string uidLeido)
         {
             try
             {
-                var t = _ctx.TarjetasRC.FirstOrDefault(x => x.Uid == uidLeido && !x.Activa);
-                if (t == null)
-                    return NotFound(new { message = "Tarjeta no encontrada o ya está activa" });
+                var tarjetaPendiente = ctx.TarjetasRC
+                    .Where(t => !t.Activa)
+                    .OrderByDescending(t => t.FechaAsignacion)
+                    .FirstOrDefault();
 
-                t.Activa = true;
-                _ctx.SaveChanges();
+                if (tarjetaPendiente == null)
+                    return NotFound(new { message = "No hay tarjetas pendientes" });
+
+                tarjetaPendiente.Activa = true;
+                tarjetaPendiente.UidFisico = uidLeido;  // ← GUARDAR UID físico
+                ctx.SaveChanges();
+
                 return Ok(new { message = "Tarjeta activada correctamente" });
             }
             catch (Exception ex)
@@ -51,6 +58,9 @@ namespace QuickTableProyect.Interface.Api
                 return BadRequest(new { error = ex.Message });
             }
         }
+
+
+
 
         // 3. Endpoint para polling desde el navegador
         [HttpGet("estado")]
@@ -61,7 +71,7 @@ namespace QuickTableProyect.Interface.Api
                 if (string.IsNullOrEmpty(uid))
                     return BadRequest(new { error = "UID requerido" });
 
-                bool activa = _ctx.TarjetasRC.Any(t => t.Uid == uid && t.Activa);
+                bool activa = ctx.TarjetasRC.Any(t => t.Uid == uid && t.Activa);
                 return Ok(activa);
             }
             catch (Exception ex)
@@ -76,18 +86,15 @@ namespace QuickTableProyect.Interface.Api
         {
             try
             {
-                // Validar formato del código
                 if (string.IsNullOrEmpty(sessionCode) || sessionCode.Length != 6 || !sessionCode.All(char.IsDigit))
-                {
-                    return Ok(new { valid = false, message = "Código de sesión inválido" });
-                }
+                    return Ok(new { valid = false, message = "Código inválido" });
 
-                // Buscar tarjeta pendiente más reciente CON Include para EF6
-                var tarjetaPendiente = _ctx.TarjetasRC
-                    .Include(t => t.Empleado) // EF6 syntax
-                    .Where(t => !t.Activa)
-                    .OrderByDescending(t => t.FechaAsignacion)
-                    .FirstOrDefault();
+                // BUSCAR tarjeta con el código específico
+                var tarjetaPendiente = ctx.TarjetasRC
+                    .Include(t => t.Empleado)
+                    .FirstOrDefault(t => !t.Activa &&
+                                       t.Empleado.Rol == "Admin" &&
+                                       t.CodigoSesion == sessionCode);
 
                 if (tarjetaPendiente != null)
                 {
@@ -102,13 +109,15 @@ namespace QuickTableProyect.Interface.Api
                     });
                 }
 
-                return Ok(new { valid = false, message = "No hay tarjetas pendientes de grabar" });
+                return NotFound(new { message = "Código de TI inválido o sin tarjetas pendientes" });
             }
             catch (Exception ex)
             {
                 return BadRequest(new { valid = false, error = ex.Message });
             }
         }
+
+
 
         // 5. Obtener información específica de una sesión
         [HttpGet("sesion-info")]
@@ -120,7 +129,7 @@ namespace QuickTableProyect.Interface.Api
                     return Ok(new { valid = false, message = "Código inválido" });
 
                 // Buscar tarjeta pendiente más reciente
-                var tarjetaPendiente = _ctx.TarjetasRC
+                var tarjetaPendiente = ctx.TarjetasRC
                     .Include(t => t.Empleado) // EF6 syntax
                     .Where(t => !t.Activa)
                     .OrderByDescending(t => t.FechaAsignacion)
@@ -155,11 +164,9 @@ namespace QuickTableProyect.Interface.Api
             {
                 // Validar código
                 if (string.IsNullOrEmpty(sessionCode) || sessionCode.Length != 6 || !sessionCode.All(char.IsDigit))
-                {
                     return Ok(new { valid = false });
-                }
 
-                var tarjetaPendiente = _ctx.TarjetasRC
+                var tarjetaPendiente = ctx.TarjetasRC
                     .Where(t => !t.Activa)
                     .OrderByDescending(t => t.FechaAsignacion)
                     .FirstOrDefault();
@@ -190,12 +197,10 @@ namespace QuickTableProyect.Interface.Api
             try
             {
                 if (string.IsNullOrEmpty(sessionCode) || sessionCode.Length != 6 || !sessionCode.All(char.IsDigit))
-                {
                     return Ok(new { valid = false, message = "Código inválido" });
-                }
 
                 // Para Admin, buscar código 2FA activo
-                var codigo2FA = _ctx.Codigos2FA
+                var codigo2FA = ctx.Codigos2FA
                     .Include(c => c.Empleado) // EF6 syntax
                     .Where(c => !c.Confirmado && c.Expiracion > DateTime.Now)
                     .FirstOrDefault();
@@ -231,5 +236,6 @@ namespace QuickTableProyect.Interface.Api
                 message = "TarjetaApiController funcionando correctamente"
             });
         }
+
     }
 }

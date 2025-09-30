@@ -69,6 +69,7 @@ namespace QuickTableProyect.Interface
         [HttpPost]
         public JsonResult Autenticar(string nombre, string contrasena)
         {
+            LimpiarCodigosVencidos();
             var emp = _empleadoService.ObtenerEmpleadoPorNombre(nombre);
             if (emp == null || emp.Contrasena != contrasena)
                 return Json(new { success = false, message = "Nombre o contraseña incorrectos." });
@@ -125,31 +126,44 @@ namespace QuickTableProyect.Interface
 
         // ----------- POST /Login/Confirmar2FA --------------
         [HttpPost]
-        public IActionResult Confirmar2FA(Guid navId, string uid)
+        public IActionResult Confirmar2FA(string navId, string uidFisico, string textoEscrito)
         {
-            var registro = _ctx.Codigos2FA  // Cambiar ctx por _ctx
-                .Include(c => c.Empleado)
-                .FirstOrDefault(c => c.NavegadorId == navId && c.Expiracion > DateTime.Now);
-
-            if (registro == null || registro.Confirmado)
+            try
             {
-                return BadRequest(); // 400
-            }
+                if (!Guid.TryParse(navId, out Guid navegadorId))
+                    return BadRequest("ID de navegador inválido");
 
-            // VERIFICACIÓN OBLIGATORIA DE TARJETA NFC
-            var tarjeta = _ctx.TarjetasRC.FirstOrDefault(t => t.Uid == uid && t.Activa);  // Cambiar ctx por _ctx
-            if (tarjeta == null || tarjeta.EmpleadoId != registro.EmpleadoId)
+                // BUSCAR tarjeta que coincida con AMBOS valores
+                var tarjeta = _ctx.TarjetasRC
+                    .Include(t => t.Empleado)
+                    .FirstOrDefault(t => t.Activa &&
+                                       t.Empleado.Rol == "Admin" &&
+                                       t.UidFisico == uidFisico &&         // UID del chip
+                                       t.Uid == textoEscrito.Trim());      // UID que escribimos
+
+                if (tarjeta == null)
+                {
+                    Console.WriteLine($"❌ Tarjeta no válida - Físico: {uidFisico}, Escrito: {textoEscrito}");
+                    return BadRequest("Tarjeta no autorizada");
+                }
+
+                // Confirmar 2FA
+                var codigo = _ctx.Codigos2FA.FirstOrDefault(c => c.NavegadorId == navegadorId && !c.Confirmado);
+                if (codigo != null)
+                {
+                    codigo.Confirmado = true;
+                    _ctx.SaveChanges();
+                    Console.WriteLine($"✅ 2FA confirmado para admin {tarjeta.Empleado.Nombre}");
+                    return Ok("2FA confirmado");
+                }
+
+                return BadRequest("Código 2FA no encontrado");
+            }
+            catch (Exception ex)
             {
-                return Unauthorized(); // 401 - Tarjeta inválida o no coincide
+                return BadRequest($"Error: {ex.Message}");
             }
-
-            // Solo aquí confirmamos el 2FA
-            registro.Confirmado = true;
-            _ctx.SaveChanges();  // Cambiar ctx por _ctx
-
-            return Ok(); // 200
         }
-
 
 
         // ----------- GET /Login/Check2FA --------------
@@ -175,5 +189,13 @@ namespace QuickTableProyect.Interface
             HttpContext.Session.Clear();
             return RedirectToAction("Index");
         }
+        private void LimpiarCodigosVencidos()
+        {
+            var vencidos = _ctx.Codigos2FA.Where(c => c.Expiracion < DateTime.Now).ToList();
+            _ctx.Codigos2FA.RemoveRange(vencidos);
+            _ctx.SaveChanges();
+            
+        }
+
     }
 }

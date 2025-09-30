@@ -27,21 +27,46 @@
 
     <script>
         const uid = "@ViewBag.UID";
+        let pollCount = 0;
+        const maxPolls = 60; // 2 minutos máximo
+
         const timer = setInterval(() => {
+            pollCount++;
+
             fetch(`/api/tarjeta/estado?uid=${uid}`)
               .then(r => r.json())
               .then(ok => {
                   if (ok) {
                       clearInterval(timer);
                       document.getElementById('statusGrabacion').innerHTML =
-                          '<i class="fas fa-check text-success"></i> Tarjeta grabada correctamente';
-                      // Recargar la página en 2 segundos para actualizar la tabla
-                      setTimeout(() => location.reload(), 2000);
+                          '<i class="fas fa-check text-success"></i> ¡Tarjeta grabada y activada correctamente!';
+
+                      // Mostrar mensaje de éxito
+                      mostrarMensaje('¡Éxito! La tarjeta del administrador ha sido activada correctamente.', 'success');
+
+                      // Auto-recargar después de 2 segundos
+                      setTimeout(() => {
+                          location.reload();
+                      }, 2000);
+
+                  } else if (pollCount >= maxPolls) {
+                      // Timeout después de 2 minutos
+                      clearInterval(timer);
+                      document.getElementById('statusGrabacion').innerHTML =
+                          '<i class="fas fa-exclamation-triangle text-warning"></i> Tiempo agotado. Verifique la Raspberry Pi.';
                   }
               })
-              .catch(err => console.log('Polling error:', err));
-        }, 2000);
+              .catch(err => {
+                  console.log('Polling error:', err);
+                  if (pollCount >= maxPolls) {
+                      clearInterval(timer);
+                      document.getElementById('statusGrabacion').innerHTML =
+                          '<i class="fas fa-times text-danger"></i> Error de conexión.';
+                  }
+              });
+        }, 2000); // Cada 2 segundos
     </script>
+
 }
 
 <div class="mb-3">
@@ -86,6 +111,14 @@
                             <i class="fas fa-key"></i>
                         </button>
 
+                        <!-- Botón Crear Tarjeta (SOLO si está pendiente) -->
+                        @if (!t.Activa)
+                        {
+                            <button type="button" class="btn btn-primary btn-sm" onclick="mostrarCodigoSesion('@t.Uid', '@t.Empleado.Nombre')" title="Crear Tarjeta">
+                                <i class="fas fa-sd-card"></i> Crear Tarjeta
+                            </button>
+                        }
+
                         <!-- Regenerar Tarjeta (solo si está activa) -->
                         @if (t.Activa)
                         {
@@ -104,6 +137,27 @@
         }
     </tbody>
 </table>
+
+<!-- Modal para mostrar código de sesión -->
+<div class="modal fade" id="codigoSesionModal" tabindex="-1" aria-labelledby="codigoSesionModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="codigoSesionModalLabel">Código de Sesión para Raspberry Pi</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+            </div>
+            <div class="modal-body text-center">
+                <p>Administrador: <strong id="adminNombreModal"></strong></p>
+                <p>UID: <strong id="uidModal"></strong></p>
+                <h2 class="text-primary my-4" id="codigoSesionDisplay"></h2>
+                <p class="text-muted">Ingrese este código en la Raspberry Pi para grabar la tarjeta</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+            </div>
+        </div>
+    </div>
+</div>
 
 <!-- Modal Cambiar Contraseña -->
 <div class="modal fade" id="modalCambiarClave" tabindex="-1">
@@ -159,8 +213,8 @@
     let adminIdEliminar = 0;
     let modalCambiarClaveInstance = null;
     let modalEliminarInstance = null;
+    let modalCodigoSesionInstance = null;
 
-    // Función personalizada para mostrar mensajes (sin toastr)
     function mostrarMensaje(mensaje, tipo) {
         const alertClass = tipo === 'success' ? 'alert-success' : 'alert-danger';
         const html = `<div class="alert ${alertClass} alert-dismissible fade show" role="alert">
@@ -168,12 +222,9 @@
                         <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
                       </div>`;
 
-        // Insertar al inicio del contenido
         const container = document.querySelector('main, .container, .container-fluid, body');
         if (container) {
             container.insertAdjacentHTML('afterbegin', html);
-
-            // Auto-remove después de 5 segundos
             setTimeout(() => {
                 const alert = container.querySelector('.alert');
                 if (alert) alert.remove();
@@ -181,13 +232,33 @@
         }
     }
 
+        function mostrarCodigoSesion(uid, adminNombre) {
+        const codigo = Math.floor(Math.random() * 900000) + 100000;
+
+        fetch('@Url.Action("AsociarCodigoSesion", "TI")', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uid: uid, codigoSesion: codigo.toString() })
+        })
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success) { alert(d.message); return; }
+
+            document.getElementById('adminNombreModal').textContent = adminNombre;
+            document.getElementById('uidModal').textContent   = uid;
+            document.getElementById('codigoSesionDisplay').textContent = codigo;
+
+            new bootstrap.Modal(document.getElementById('codigoSesionModal')).show();
+        });
+    }
+
+
     function mostrarModalCambiarClave(id, nombre) {
         document.getElementById('adminIdCambio').value = id;
         document.getElementById('nombreAdmin').textContent = nombre;
         document.getElementById('nuevaClave').value = '';
         document.getElementById('confirmarClave').value = '';
 
-        // Crear instancia del modal y mostrar
         modalCambiarClaveInstance = new bootstrap.Modal(document.getElementById('modalCambiarClave'));
         modalCambiarClaveInstance.show();
     }
@@ -196,12 +267,10 @@
         adminIdEliminar = id;
         document.getElementById('nombreEliminar').textContent = nombre;
 
-        // Crear instancia del modal y mostrar
         modalEliminarInstance = new bootstrap.Modal(document.getElementById('modalEliminar'));
         modalEliminarInstance.show();
     }
 
-    // Envío del formulario de cambio de clave
     document.getElementById('formCambiarClave').addEventListener('submit', function(e) {
         e.preventDefault();
 
@@ -219,7 +288,6 @@
             return;
         }
 
-        // Enviar al servidor
         fetch('@Url.Action("CambiarClaveAdmin", "TI")', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -292,9 +360,7 @@
         }
     }
 
-    // SOLUCION PARA LOS BOTONES DE CANCELAR
     document.addEventListener('DOMContentLoaded', function() {
-        // Botones de cerrar del modal de cambiar clave
         const modalCambiarClave = document.getElementById('modalCambiarClave');
         if (modalCambiarClave) {
             modalCambiarClave.querySelectorAll('[data-bs-dismiss="modal"]').forEach(btn => {
@@ -311,7 +377,6 @@
             });
         }
 
-        // Botones de cerrar del modal de eliminar
         const modalEliminar = document.getElementById('modalEliminar');
         if (modalEliminar) {
             modalEliminar.querySelectorAll('[data-bs-dismiss="modal"]').forEach(btn => {
@@ -328,22 +393,20 @@
             });
         }
 
-        // Cerrar modal al hacer clic en el backdrop
-        modalCambiarClave?.addEventListener('click', function(e) {
-            if (e.target === modalCambiarClave) {
-                if (modalCambiarClaveInstance) {
-                    modalCambiarClaveInstance.hide();
-                }
-            }
-        });
-
-        modalEliminar?.addEventListener('click', function(e) {
-            if (e.target === modalEliminar) {
-                if (modalEliminarInstance) {
-                    modalEliminarInstance.hide();
-                }
-            }
-        });
+        const modalCodigoSesion = document.getElementById('codigoSesionModal');
+        if (modalCodigoSesion) {
+            modalCodigoSesion.querySelectorAll('[data-bs-dismiss="modal"]').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    if (modalCodigoSesionInstance) {
+                        modalCodigoSesionInstance.hide();
+                    } else {
+                        modalCodigoSesion.style.display = 'none';
+                        document.body.classList.remove('modal-open');
+                        const backdrop = document.querySelector('.modal-backdrop');
+                        if (backdrop) backdrop.remove();
+                    }
+                });
+            });
+        }
     });
 </script>
-
